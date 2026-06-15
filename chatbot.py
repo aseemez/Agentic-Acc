@@ -62,65 +62,78 @@ You have access to a MongoDB database with these collections:
 Always use the query_mongodb tool to get real data before answering.
 Never make up numbers. Be concise and clear."""
 
-# ── THE AGENT LOOP ──
-def ask(question: str) -> str:
-    tools = types.Tool(function_declarations=[query_tool])
-
-    messages = [
-        types.Content(role="user", parts=[
-            types.Part.from_text(SYSTEM + f"\n\nQuestion: {question}")
-        ])
-    ]
-
-    while True:
-        response = gemini.models.generate_content(
-            model="gemini-3.5-flash",
-            contents=messages,
-            config=types.GenerateContentConfig(tools=[tools])
+# ── CONVERSATION STATE ──
+class AccountingChat:
+    def __init__(self):
+        self.tools = types.Tool(function_declarations=[query_tool])
+        # history persists across the entire session
+        self.history = []
+    
+    def ask(self, question: str) -> str:
+        # add user message to persistent history
+        self.history.append(
+            types.Content(role="user", parts=[
+                types.Part(text=question)
+            ])
         )
 
-        candidate = response.candidates[0]
-        part = candidate.content.parts[0]
-
-        # check if gemini wants to call a tool
-        if hasattr(part, "function_call") and part.function_call:
-            fn = part.function_call
-            tool_args = dict(fn.args)
-
-            print(f"  [calling {fn.name} with {tool_args}]")
-
-            result = query_mongodb(
-                collection=tool_args["collection"],
-                filter=tool_args.get("filter", {}),
-                limit=tool_args.get("limit", 10)
+        while True:
+            response = gemini.models.generate_content(
+                model="gemini-3.5-flash",
+                contents=self.history,
+                config=types.GenerateContentConfig(
+                    system_instruction=SYSTEM,
+                    tools=[self.tools]
+                )
             )
 
-            # append model response and tool result as proper Content objects
-            messages.append(types.Content(
-                role="model",
-                parts=[part]
-            ))
-            messages.append(types.Content(
-                role="user",
-                parts=[types.Part.from_function_response(
-                    name=fn.name,
-                    response={"result": json.dumps(result, default=str)}
-                )]
-            ))
+            candidate = response.candidates[0]
+            part = candidate.content.parts[0]
 
-        else:
-            return part.text
+            if hasattr(part, "function_call") and part.function_call:
+                fn = part.function_call
+                tool_args = dict(fn.args)
+
+                print(f"  [calling {fn.name} with {tool_args}]")
+
+                result = query_mongodb(
+                    collection=tool_args["collection"],
+                    filter=tool_args.get("filter", {}),
+                    limit=tool_args.get("limit", 10)
+                )
+
+                # append model turn and tool result to history
+                self.history.append(types.Content(
+                    role="model",
+                    parts=[part]
+                ))
+                self.history.append(types.Content(
+                    role="user",
+                    parts=[types.Part.from_function_response(
+                        name=fn.name,
+                        response={"result": json.dumps(result, default=str)}
+                    )]
+                ))
+
+            else:
+                # final answer — append to history and return
+                self.history.append(types.Content(
+                    role="model",
+                    parts=[part]
+                ))
+                return part.text
 
 # ── INTERACTIVE CHAT ──
 if __name__ == "__main__":
     print("Accounting Assistant ready. Type 'quit' to exit.\n")
+    chat = AccountingChat()
     while True:
         question = input("You: ").strip()
         if question.lower() in ["quit", "exit"]:
             break
         if not question:
             continue
-        print("\nAssistant: ", end="")
-        answer = ask(question)
+        print("\nAssistant:", end=" ")
+        answer = chat.ask(question)
         print(answer)
         print()

@@ -19,7 +19,7 @@ def parse_receipt(image_path: str) -> dict:
     # read image and convert to base64
     with open(image_path, "rb") as f:
         image_data = base64.b64encode(f.read()).decode("utf-8")
-    
+        
     # figure out file type
     ext = image_path.split(".")[-1].lower()
     mime_map = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp"}
